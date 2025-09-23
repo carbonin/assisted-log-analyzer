@@ -1,0 +1,412 @@
+"""
+Networking analysis signatures for OpenShift Assisted Installer logs.
+These signatures analyze network configuration and connectivity issues.
+"""
+import json
+import logging
+import ipaddress
+import os
+import re
+from collections import OrderedDict
+from typing import Optional
+
+from .base import Signature, ErrorSignature, SignatureResult
+from log_analyzer.log_analyzer import NEW_LOG_BUNDLE_PATH, OLD_LOG_BUNDLE_PATH
+from log_analyzer.signatures.advanced_analysis import operator_statuses_from_controller_logs, filter_operators
+
+logger = logging.getLogger(__name__)
+
+
+class SNOMachineCidrSignature(Signature):
+    """Validates machine CIDR configuration for SNO clusters."""
+    
+    def analyze(self, log_analyzer) -> Optional[SignatureResult]:
+        """Analyze SNO machine CIDR configuration."""
+        try:
+            metadata = log_analyzer.metadata
+            cluster = metadata["cluster"]
+            
+            if cluster.get("high_availability_mode") != "None":
+                return None
+            
+            host = cluster["hosts"][0]
+            inventory = json.loads(host["inventory"])
+            
+            # The first one is the machine_cidr that will be used for network configuration
+            machine_cidr = ipaddress.ip_network(cluster["machine_networks"][0]["cidr"])
+            
+            for route in inventory["routes"]:
+                # currently only relevant for ipv4
+                if (
+                    route.get("destination") == "0.0.0.0"
+                    and route.get("gateway")
+                    and ipaddress.ip_address(route["gateway"]) in machine_cidr
+                ):
+                    return None
+            
+            content = (
+                f"Machine cidr {machine_cidr} doesn't match any default route configured on the host.\n"
+                f"It will cause etcd certificate error (or some other) as kubelet and OVNKubernetes will not run with expected machine cidr.\n"
+                f"We hope it will be fixed after https://issues.redhat.com/browse/SDN-3053"
+            )
+            
+            return SignatureResult(
+                signature_name=self.name,
+                title="Invalid Machine CIDR",
+                content=content,
+                severity="error"
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in SNOMachineCidrSignature: {e}")
+            return None
+
+
+class NonstandardNetworkType(ErrorSignature):
+    """Detects non-standard CNI network types."""
+    
+    allowed_network_types = [
+        "OpenShiftSDN",
+        "OVNKubernetes",
+    ]
+    
+    def analyze(self, log_analyzer) -> Optional[SignatureResult]:
+        """Analyze network type configuration."""
+        try:
+            install_config = log_analyzer.get_install_config()
+            if not install_config:
+                return None
+                
+            network_type = install_config.get("networking", {}).get("networkType")
+            
+            if network_type and network_type not in self.allowed_network_types:
+                content = f"Cluster is using a non-standard network type: {network_type}"
+                
+                return self.create_result(
+                    title="Non-standard CNI (Network Type)",
+                    content=content,
+                    severity="warning"
+                )
+            
+        except Exception as e:
+            logger.error(f"Error in NonstandardNetworkType: {e}")
+        
+        return None
+
+
+class StaticNetworking(Signature):
+    """Shows infraenv's static networking configuration."""
+    
+    def analyze(self, log_analyzer) -> Optional[SignatureResult]:
+        """Analyze static networking configuration."""
+        try:
+            metadata = log_analyzer.metadata
+            infraenvs = metadata.get("infraenvs", [])
+            
+            messages = []
+            for infraenv in infraenvs:
+                if infraenv.get("static_network_config", "") not in ("", None):
+                    try:
+                        static_config = json.loads(infraenv["static_network_config"])
+                        for entry in static_config:
+                            # Format the static network config for display
+                            config_info = {
+                                "infraenv_name": infraenv["name"],
+                                "nmstate_config": entry.get("network_yaml", ""),
+                                "mapping": entry.get("mac_interface_map", {}),
+                            }
+                            messages.append(f"Infraenv {infraenv['name']} has static network config")
+                    except (json.JSONDecodeError, KeyError) as e:
+                        logger.warning(f"Failed to parse static network config: {e}")
+                        continue
+            
+            if messages:
+                content = "At least one infraenv has static networking configuration:\n" + "\n".join(messages)
+                
+                return SignatureResult(
+                    signature_name=self.name,
+                    title="Static Networking Configuration",
+                    content=content,
+                    severity="info"
+                )
+            
+        except Exception as e:
+            logger.error(f"Error in StaticNetworking: {e}")
+        
+        return None
+
+
+class DuplicateVIP(ErrorSignature):
+    """Looks for nodes holding the same VIP."""
+    
+    def analyze(self, log_analyzer) -> Optional[SignatureResult]:
+        """Analyze for duplicate VIP issues."""
+        try:
+            metadata = log_analyzer.metadata
+            cluster = metadata["cluster"]
+            
+            # SNO doesn't need balancing
+            if cluster.get("high_availability_mode") == "None":
+                return None
+            
+            # VIPs are not relevant with load balancer
+            if cluster.get("user_managed_networking") == True:  # noqa: E712
+                return None
+            
+            vips = [vip["ip"] for vip in cluster.get("api_vips", [])]
+            if not vips:
+                return None
+            
+            collisions = []
+            # Check control-plane nodes
+            try:
+                control_plane_dir = log_analyzer.logs_archive.get(f"{NEW_LOG_BUNDLE_PATH}/control-plane/")
+                for node_dir in getattr(control_plane_dir, "iterdir", lambda: [])():
+                    node_ip = os.path.basename(node_dir)
+                    try:
+                        ip_addr = log_analyzer.logs_archive.get(
+                            f"{NEW_LOG_BUNDLE_PATH}/control-plane/{node_ip}/network/ip-addr.txt"
+                        )
+                    except FileNotFoundError:
+                        continue
+                    for vip in vips:
+                        if vip in ip_addr:
+                            collisions.append((vip, node_ip))
+            except FileNotFoundError:
+                pass
+
+            # Check bootstrap
+            try:
+                bootstrap_ip_addr = log_analyzer.logs_archive.get(
+                    f"{NEW_LOG_BUNDLE_PATH}/bootstrap/network/ip-addr.txt"
+                )
+                for vip in vips:
+                    if vip in bootstrap_ip_addr:
+                        collisions.append((vip, "bootstrap"))
+            except FileNotFoundError:
+                pass
+
+            # Fallback to OLD path
+            if not collisions:
+                try:
+                    control_plane_dir = log_analyzer.logs_archive.get(f"{OLD_LOG_BUNDLE_PATH}/control-plane/")
+                    for node_dir in getattr(control_plane_dir, "iterdir", lambda: [])():
+                        node_ip = os.path.basename(node_dir)
+                        try:
+                            ip_addr = log_analyzer.logs_archive.get(
+                                f"{OLD_LOG_BUNDLE_PATH}/control-plane/{node_ip}/network/ip-addr.txt"
+                            )
+                        except FileNotFoundError:
+                            continue
+                        for vip in vips:
+                            if vip in ip_addr:
+                                collisions.append((vip, node_ip))
+                except FileNotFoundError:
+                    pass
+
+                try:
+                    bootstrap_ip_addr = log_analyzer.logs_archive.get(
+                        f"{OLD_LOG_BUNDLE_PATH}/bootstrap/network/ip-addr.txt"
+                    )
+                    for vip in vips:
+                        if vip in bootstrap_ip_addr:
+                            collisions.append((vip, "bootstrap"))
+                except FileNotFoundError:
+                    pass
+
+            # Aggregate per VIP
+            vip_to_nodes = {}
+            for vip, node in collisions:
+                vip_to_nodes.setdefault(vip, set()).add(node)
+
+            dup_msgs = [
+                f"Found duplicate VIP {vip} in control-plane hosts {' and '.join(sorted(nodes))}"
+                for vip, nodes in vip_to_nodes.items()
+                if len(nodes) > 1
+            ]
+
+            if dup_msgs:
+                return self.create_result(
+                    title="VIP found in multiple nodes",
+                    content="\n".join(dup_msgs),
+                    severity="error",
+                )
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error in DuplicateVIP: {e}")
+        
+        return None
+
+
+class NameserverInClusterNetwork(ErrorSignature):
+    """Detect nameservers that overlap with cluster networks."""
+
+    NAMESERVER_PATTERN = re.compile(r"^nameserver (.*)$")
+
+    def _get_nameservers(self, log_analyzer, base_path: str):
+        nameservers = set()
+        # control-plane
+        try:
+            control_plane_dir = log_analyzer.logs_archive.get(f"{base_path}/control-plane/")
+            for node_dir in getattr(control_plane_dir, "iterdir", lambda: [])():
+                node_ip = os.path.basename(node_dir)
+                try:
+                    resolvconf = log_analyzer.logs_archive.get(
+                        f"{base_path}/control-plane/{node_ip}/network/resolv.conf"
+                    )
+                except FileNotFoundError:
+                    continue
+                for line in resolvconf.splitlines():
+                    m = self.NAMESERVER_PATTERN.search(line)
+                    if m:
+                        nameservers.add(m.group(1))
+        except FileNotFoundError:
+            pass
+        # bootstrap
+        try:
+            resolvconf = log_analyzer.logs_archive.get(f"{base_path}/bootstrap/network/resolv.conf")
+            for line in resolvconf.splitlines():
+                m = self.NAMESERVER_PATTERN.search(line)
+                if m:
+                    nameservers.add(m.group(1))
+        except FileNotFoundError:
+            pass
+        return nameservers
+
+    def analyze(self, log_analyzer) -> Optional[SignatureResult]:
+        md = log_analyzer.metadata
+        cidrs = [network["cidr"] for network in md["cluster"].get("cluster_networks", [])]
+        if not cidrs:
+            return None
+
+        report_lines = []
+        for base in (NEW_LOG_BUNDLE_PATH, OLD_LOG_BUNDLE_PATH):
+            nameservers = self._get_nameservers(log_analyzer, base)
+            for ns in nameservers:
+                for cidr in cidrs:
+                    try:
+                        if ipaddress.ip_address(ns) in ipaddress.ip_network(cidr, strict=False):
+                            report_lines.append(
+                                f"User defined nameserver {ns} overlaps with the cluster network {cidr}"
+                            )
+                    except ValueError:
+                        continue
+        if report_lines:
+            return self.create_result(
+                title="Nameserver in internal network",
+                content="\n".join(sorted(set(report_lines))),
+                severity="error",
+            )
+        return None
+
+
+class NetworksMtuMismatch(ErrorSignature):
+    """Detect MTU mismatch between interface and overlay network."""
+
+    LOG_PATTERN = re.compile(
+        r"Failed to start sdn: interface MTU [(]([0-9]+)[)] is too small for specified overlay MTU [(]([0-9]+)[)]"
+    )
+
+    def analyze(self, log_analyzer) -> Optional[SignatureResult]:
+        path = (
+            "controller_logs.tar.gz/must-gather.tar.gz/must-gather.local.*/*/namespaces/openshift-sdn/pods/sdn-*/sdn/sdn/logs/*.log"
+        )
+        try:
+            sdn_logs = log_analyzer.logs_archive.get(path)
+        except FileNotFoundError:
+            return None
+        m = self.LOG_PATTERN.search(sdn_logs)
+        if m:
+            return self.create_result(
+                title="Networks MTU Mismatch",
+                content=f"SDN failed to start: Overlay (cluster) network MTU {m.group(2)} is bigger than the interface MTU {m.group(1)}",
+                severity="error",
+            )
+        return None
+
+
+class DualStackBadRoute(ErrorSignature):
+    """Looks for BZ 2088346 in ovnkube-node logs."""
+
+    fatal_error_regex = re.compile(r"^F.*failed to get default gateway interface$", re.MULTILINE)
+
+    def analyze(self, log_analyzer) -> Optional[SignatureResult]:
+        for base in (NEW_LOG_BUNDLE_PATH, OLD_LOG_BUNDLE_PATH):
+            path = f"{base}/control-plane/*/containers/ovnkube-node-*.log"
+            try:
+                ovnkube_logs = log_analyzer.logs_archive.get(path)
+            except FileNotFoundError:
+                continue
+            if self.fatal_error_regex.search(ovnkube_logs):
+                return self.create_result(
+                    title="Bugzilla 2088346",
+                    content="ovnkube-node logs indicate the cluster may be hitting BZ 2088346",
+                    severity="error",
+                )
+        return None
+
+
+class DualstackrDNSBug(ErrorSignature):
+    """Detect kube-apiserver 'must match public address family' message (MGMT-11651)."""
+
+    def analyze(self, log_analyzer) -> Optional[SignatureResult]:
+        for base in (NEW_LOG_BUNDLE_PATH, OLD_LOG_BUNDLE_PATH):
+            path = f"{base}/bootstrap/containers/kube-apiserver-*.log"
+            try:
+                kubeapiserver_logs = log_analyzer.logs_archive.get(path)
+            except FileNotFoundError:
+                continue
+            if "must match public address family" in kubeapiserver_logs:
+                return self.create_result(
+                    title="rDNS and DNS entries for IPv4/IPv6 interface - MGMT-11651",
+                    content=(
+                        "kube-apiserver logs contain the message 'must match public address family', this is probably due to MGMT-11651"
+                    ),
+                    severity="warning",
+                )
+        return None
+
+
+class UserManagedNetworkingLoadBalancer(ErrorSignature):
+    """Detects UMN clusters where load-balancer related operators are the only unhealthy ones."""
+
+    lb_operators = {"authentication", "console", "ingress"}
+
+    def analyze(self, log_analyzer) -> Optional[SignatureResult]:
+        metadata = log_analyzer.metadata
+        cluster_md = metadata.get("cluster", {})
+
+        if not cluster_md.get("user_managed_networking", False):
+            return None
+
+        if cluster_md.get("high_availability_mode") == "None":
+            return None
+
+        try:
+            controller_logs = log_analyzer.get_controller_logs()
+        except FileNotFoundError:
+            return None
+
+        operator_statuses = operator_statuses_from_controller_logs(controller_logs)
+
+        unhealthy_operators = filter_operators(
+            operator_statuses,
+            (("Degraded", True), ("Available", False), ("Progressing", True)),
+            aggregation_function=any,
+        )
+
+        unhealthy_keys = set(unhealthy_operators.keys())
+        if unhealthy_keys and unhealthy_keys.issubset(self.lb_operators):
+            content = (
+                "Cluster has user-managed networking and only load-balancer related operators seem to be unhealthy."
+            )
+            if missing := self.lb_operators - unhealthy_keys:
+                content += f" Operators missing from unhealthy set: {', '.join(sorted(missing))}."
+            return self.create_result(
+                title="Probably user managed load-balancer issues",
+                content=content,
+                severity="warning",
+            )
+
+        return None

@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""
+Development runner for the OpenShift Assisted Installer Log Analyzer.
+This script runs the tool directly from source without installation.
+"""
+import sys
+import os
+
+# Add the src directory to Python path for development
+script_dir = os.path.dirname(os.path.abspath(__file__))
+src_dir = os.path.join(script_dir, 'src')
+sys.path.insert(0, src_dir)
+
+# Import and run the main function
+from log_analyzer.main import main
+
+if __name__ == "__main__":
+    sys.exit(main())
