@@ -62,38 +62,6 @@ class SNOMachineCidrSignature(Signature):
             return None
 
 
-class NonstandardNetworkType(ErrorSignature):
-    """Detects non-standard CNI network types."""
-    
-    allowed_network_types = [
-        "OpenShiftSDN",
-        "OVNKubernetes",
-    ]
-    
-    def analyze(self, log_analyzer) -> Optional[SignatureResult]:
-        """Analyze network type configuration."""
-        try:
-            install_config = log_analyzer.get_install_config()
-            if not install_config:
-                return None
-                
-            network_type = install_config.get("networking", {}).get("networkType")
-            
-            if network_type and network_type not in self.allowed_network_types:
-                content = f"Cluster is using a non-standard network type: {network_type}"
-                
-                return self.create_result(
-                    title="Non-standard CNI (Network Type)",
-                    content=content,
-                    severity="warning"
-                )
-            
-        except Exception as e:
-            logger.error(f"Error in NonstandardNetworkType: {e}")
-        
-        return None
-
-
 class StaticNetworking(Signature):
     """Shows infraenv's static networking configuration."""
     

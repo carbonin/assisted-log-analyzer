@@ -196,26 +196,6 @@ class LogAnalyzer:
         except FileNotFoundError:
             raise FileNotFoundError("Could not find must-gather logs")
 
-    def get_manifests(self) -> List[Dict[str, Any]]:
-        """Get cluster manifests metadata."""
-        try:
-            manifests_content = self.logs_archive.get("cluster_files/manifests")
-            # This should return a JSON list of manifest file metadata
-            return json.loads(manifests_content) if manifests_content else []
-        except Exception as e:
-            logger.error(f"Failed to get manifests: {e}")
-            return []
-
-    def get_install_config(self) -> Dict[str, Any]:
-        """Get install-config.yaml content."""
-        try:
-            import yaml
-            install_config_content = self.logs_archive.get("cluster_files/install-config.yaml", mode="rb")
-            return yaml.safe_load(install_config_content)
-        except Exception as e:
-            logger.error(f"Failed to get install-config: {e}")
-            return {}
-
     @staticmethod
     def get_hostname(host: Dict[str, Any]) -> str:
         """Extract hostname from host metadata."""

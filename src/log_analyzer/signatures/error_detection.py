@@ -246,30 +246,6 @@ class WrongBootOrderSignature(ErrorSignature):
         return None
 
 
-class EmptyManifest(ErrorSignature):
-    """Looks for empty manifest issues (MGMT-15243)."""
-
-    def analyze(self, log_analyzer) -> Optional[SignatureResult]:
-        """Analyze for empty manifests."""
-        try:
-            manifests = log_analyzer.get_manifests()
-
-            # Check if any manifest is suspiciously small (less than 30 bytes)
-            if any(manifest.get("size", 1) < 30 for manifest in manifests):
-                content = "Empty or suspiciously small manifests detected. See MGMT-15243 for more information."
-
-                return self.create_result(
-                    title="Empty Manifest",
-                    content=content,
-                    severity="error"
-                )
-
-        except Exception as e:
-            logger.error(f"Error in EmptyManifest: {e}")
-
-        return None
-
-
 class SNOHostnameHasEtcd(ErrorSignature):
     """Looks for etcd in SNO hostname (OCPBUGS-15852)."""
 
