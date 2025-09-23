@@ -102,7 +102,7 @@ class HostsStatusSignature(Signature):
     def _generate_hosts_summary(self, hosts, log_analyzer):
         """Generate a summary of host issues."""
         host_summary = []
-        some_done = any(host["progress"] == "Done" for host in hosts)
+        some_done = any(host["progress"]["current_stage"] == "Done" for host in hosts)
 
         for host in hosts:
             if host["role"] not in ["master", "bootstrap"]:
@@ -121,7 +121,7 @@ class HostsStatusSignature(Signature):
                 "Waiting for control plane": "Masters never formed 2-node cluster",
                 "Waiting for controller": "Assisted installer controller pod never started",
                 "Writing image to disk": "Image probably failed to be written on disk",
-            }.get(host["progress"], "Unknown")
+            }.get(host["progress"]["current_stage"], "Unknown")
 
             host_summary.append(OrderedDict(
                 hostname=log_analyzer.get_hostname(host),
