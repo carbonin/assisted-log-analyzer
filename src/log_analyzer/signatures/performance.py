@@ -227,5 +227,4 @@ class InstallationDiskFIOSignature(Signature):
 
 
 # TODO: Add more performance signatures here:
-# - InsufficientLVMCleanup
 # - SkipDisks

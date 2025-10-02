@@ -135,7 +135,6 @@ Use `analyze-openshift-logs --list-signatures` to see exactly which signatures a
 - `ErrorOnCleanupInstallDevice`: Notes non-fatal cleanupInstallDevice warnings.
 - `MissingMC`: Detects missing rendered MachineConfig resources.
 - `ErrorCreatingReadWriteLayer`: Surfaces pods failing with "error creating read-write layer" (BZ 1993243).
-- `InsufficientLVMCleanup`: Warns about LVM cleanup issues (MGMT-11695).
 - `SkipDisks`: Reports hosts configured to skip disk formatting.
 
 ### Advanced Analysis
