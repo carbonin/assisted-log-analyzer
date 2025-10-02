@@ -61,49 +61,6 @@ class SNOMachineCidrSignature(Signature):
             logger.error(f"Error in SNOMachineCidrSignature: {e}")
             return None
 
-
-class StaticNetworking(Signature):
-    """Shows infraenv's static networking configuration."""
-    
-    def analyze(self, log_analyzer) -> Optional[SignatureResult]:
-        """Analyze static networking configuration."""
-        try:
-            metadata = log_analyzer.metadata
-            infraenvs = metadata.get("infraenvs", [])
-            
-            messages = []
-            for infraenv in infraenvs:
-                if infraenv.get("static_network_config", "") not in ("", None):
-                    try:
-                        static_config = json.loads(infraenv["static_network_config"])
-                        for entry in static_config:
-                            # Format the static network config for display
-                            config_info = {
-                                "infraenv_name": infraenv["name"],
-                                "nmstate_config": entry.get("network_yaml", ""),
-                                "mapping": entry.get("mac_interface_map", {}),
-                            }
-                            messages.append(f"Infraenv {infraenv['name']} has static network config")
-                    except (json.JSONDecodeError, KeyError) as e:
-                        logger.warning(f"Failed to parse static network config: {e}")
-                        continue
-            
-            if messages:
-                content = "At least one infraenv has static networking configuration:\n" + "\n".join(messages)
-                
-                return SignatureResult(
-                    signature_name=self.name,
-                    title="Static Networking Configuration",
-                    content=content,
-                    severity="info"
-                )
-            
-        except Exception as e:
-            logger.error(f"Error in StaticNetworking: {e}")
-        
-        return None
-
-
 class DuplicateVIP(ErrorSignature):
     """Looks for nodes holding the same VIP."""
     
