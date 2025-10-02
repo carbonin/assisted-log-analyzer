@@ -106,56 +106,6 @@ class HostsStatusSignature(Signature):
 
         return self.generate_table(host_summary) if host_summary else ""
 
-
-class DeletedHostsStatusSignature(Signature):
-    """Analyzes deleted hosts."""
-
-    def analyze(self, log_analyzer) -> Optional[SignatureResult]:
-        """Analyze deleted hosts status."""
-        try:
-            metadata = log_analyzer.metadata
-            cluster = metadata["cluster"]
-
-            if len(cluster.get("deleted_hosts", [])) < 1:
-                return None
-
-            hosts = []
-            for host in cluster["deleted_hosts"]:
-                info = host["status_info"]
-                role = host["role"]
-                inventory = json.loads(host["inventory"])
-                if host.get("bootstrap", False):
-                    role = "bootstrap"
-
-                hosts.append(OrderedDict(
-                    id=host["id"],
-                    hostname=log_analyzer.get_hostname(host),
-                    progress=host["progress"]["current_stage"],
-                    status=host["status"],
-                    role=role,
-                    boot_mode=inventory.get("boot", {}).get("current_boot_mode", "N/A"),
-                    status_info=str(info),
-                    logs_info=host.get("logs_info", ""),
-                    last_checked_in_at=self.format_time(
-                        host.get("checked_in_at", str(datetime.min))
-                    ),
-                ))
-
-            content = "Some hosts have been deleted before the installation started\n"
-            content += self.generate_table(hosts)
-
-            return SignatureResult(
-                signature_name=self.name,
-                title="Deleted Hosts Status",
-                content=content,
-                severity="warning"
-            )
-
-        except Exception as e:
-            logger.error(f"Error in DeletedHostsStatusSignature: {e}")
-            return None
-
-
 class ComponentsVersionSignature(Signature):
     """Analyzes component versions."""
 
