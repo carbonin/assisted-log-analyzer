@@ -76,44 +76,6 @@ class MasterFailedToPullIgnitionSignature(ErrorSignature):
 
         return None
 
-class PendingUserAction(ErrorSignature):
-    """Detects when cluster moved from pending user action to error."""
-
-    cluster_status_regex = re.compile(r"Updated status of the cluster to (.*)")
-
-    def analyze(self, log_analyzer) -> Optional[SignatureResult]:
-        """Analyze pending user action transitions."""
-        try:
-            events = log_analyzer.get_last_install_cluster_events()
-            cluster_status_list = self._list_cluster_status_updates(events)
-
-            # Check if last status is always "error" and previous was "installing-pending-user-action"
-            if len(cluster_status_list) >= 2 and cluster_status_list[-2] == "installing-pending-user-action":
-                content = "The cluster moved from Installing pending user action to error."
-
-                return self.create_result(
-                    title="Pending User Action",
-                    content=content,
-                    severity="error"
-                )
-
-        except Exception as e:
-            logger.error(f"Error in PendingUserAction: {e}")
-
-        return None
-
-    @classmethod
-    def _list_cluster_status_updates(cls, events):
-        """Extract cluster status updates from events."""
-        def get_cluster_status(event):
-            match = cls.cluster_status_regex.match(event["message"])
-            if match:
-                return match.group(1)
-            return None
-
-        return [status for event in events if (status := get_cluster_status(event)) is not None]
-
-
 class WrongBootOrderSignature(ErrorSignature):
     """Reports hosts that need manual booting from installation disk."""
 
