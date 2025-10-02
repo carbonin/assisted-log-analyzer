@@ -76,44 +76,6 @@ class MasterFailedToPullIgnitionSignature(ErrorSignature):
 
         return None
 
-
-class CoreOSInstallerErrorSignature(ErrorSignature):
-    """Looks for coreos-installer errors, usually due to bad disks."""
-
-    ERROR_PATTERN = r"coreos-installer install .* Error exit status"
-
-    def analyze(self, log_analyzer) -> Optional[SignatureResult]:
-        """Analyze CoreOS installer errors."""
-        try:
-            metadata = log_analyzer.metadata
-            cluster = metadata["cluster"]
-
-            hosts = []
-            for host in cluster["hosts"]:
-                status_info = host["status_info"]
-                if _search_patterns_in_string(status_info, self.ERROR_PATTERN):
-                    hosts.append(OrderedDict(
-                        id=host["id"],
-                        hostname=log_analyzer.get_hostname(host),
-                        status_info=status_info,
-                    ))
-
-            if hosts:
-                content = "CoreOS installer errors were found.\nIt usually indicates that an error occurred on writing image on disk.\n\n"
-                content += self.generate_table(hosts)
-
-                return self.create_result(
-                    title="CoreOS Installer Error",
-                    content=content,
-                    severity="error"
-                )
-
-        except Exception as e:
-            logger.error(f"Error in CoreOSInstallerErrorSignature: {e}")
-
-        return None
-
-
 class PendingUserAction(ErrorSignature):
     """Detects when cluster moved from pending user action to error."""
 

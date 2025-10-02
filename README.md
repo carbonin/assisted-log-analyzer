@@ -128,7 +128,6 @@ Use `analyze-openshift-logs --list-signatures` to see exactly which signatures a
 ### Error Detection
 
 - `MasterFailedToPullIgnitionSignature`: Identifies masters that failed to pull ignition.
-- `CoreOSInstallerErrorSignature`: Detects coreos-installer failures writing the image.
 - `PendingUserAction`: Warns when clusters regress from pending user action to error.
 - `WrongBootOrderSignature`: Finds hosts that require manual boot due to boot-order issues.
 - `EmptyManifest`: Detects suspiciously small manifests (MGMT-15243).
