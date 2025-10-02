@@ -127,7 +127,6 @@ Use `analyze-openshift-logs --list-signatures` to see exactly which signatures a
 
 ### Error Detection
 
-- `MediaDisconnectionSignature`: Flags media disconnection errors during installation.
 - `MasterFailedToPullIgnitionSignature`: Identifies masters that failed to pull ignition.
 - `CoreOSInstallerErrorSignature`: Detects coreos-installer failures writing the image.
 - `PendingUserAction`: Warns when clusters regress from pending user action to error.
