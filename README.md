@@ -102,7 +102,6 @@ Use `analyze-openshift-logs --list-signatures` to see exactly which signatures a
 ### Basic Information
 
 - `HostsStatusSignature`: Summarizes host status and installation progress.
-- `DeletedHostsStatusSignature`: Highlights hosts that were removed before install started.
 - `ComponentsVersionSignature`: Reports Assisted Installer component versions.
 - `FailureDescription`: Produces a cluster-level failure summary table.
 - `HostsExtraDetailSignature`: Shows additional inventory information for each host.
