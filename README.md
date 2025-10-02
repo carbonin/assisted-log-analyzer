@@ -128,7 +128,6 @@ Use `analyze-openshift-logs --list-signatures` to see exactly which signatures a
 ### Error Detection
 
 - `MasterFailedToPullIgnitionSignature`: Identifies masters that failed to pull ignition.
-- `EmptyManifest`: Detects suspiciously small manifests (MGMT-15243).
 - `SNOHostnameHasEtcd`: Validates that SNO hostnames do not contain "etcd" (OCPBUGS-15852).
 - `ApiInvalidCertificateSignature`: Highlights invalid SAN values on Assisted Installer API certificates.
 - `ApiExpiredCertificateSignature`: Detects expired or not-yet-valid kube-apiserver certificates.
