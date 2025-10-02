@@ -128,7 +128,6 @@ Use `analyze-openshift-logs --list-signatures` to see exactly which signatures a
 ### Error Detection
 
 - `MasterFailedToPullIgnitionSignature`: Identifies masters that failed to pull ignition.
-- `PendingUserAction`: Warns when clusters regress from pending user action to error.
 - `WrongBootOrderSignature`: Finds hosts that require manual boot due to boot-order issues.
 - `EmptyManifest`: Detects suspiciously small manifests (MGMT-15243).
 - `SNOHostnameHasEtcd`: Validates that SNO hostnames do not contain "etcd" (OCPBUGS-15852).
