@@ -17,48 +17,6 @@ from .base import ErrorSignature, SignatureResult
 
 logger = logging.getLogger(__name__)
 
-
-class MediaDisconnectionSignature(ErrorSignature):
-    """Analyzes virtual media disconnection issues."""
-
-    ERRORS_PATTERNS = "Unable to read from the discovery media"
-
-    def analyze(self, log_analyzer) -> Optional[SignatureResult]:
-        """Analyze media disconnection issues."""
-        try:
-            metadata = log_analyzer.metadata
-            cluster = metadata["cluster"]
-
-            hosts = []
-            for host in cluster["hosts"]:
-                status_info = host["status_info"]
-                if self.ERRORS_PATTERNS in status_info:
-                    hosts.append(OrderedDict(
-                        id=host["id"],
-                        hostname=log_analyzer.get_hostname(host),
-                        status_info=status_info,
-                    ))
-
-            if hosts:
-                content = """Media disconnection events were found.
-It usually indicates that reading data from media disk cannot be made due to a network problem on PXE setup,
-bad contact with the media disk, or actual hardware disconnection.
-
-"""
-                content += self.generate_table(hosts)
-
-                return self.create_result(
-                    title="Virtual Media Disconnection",
-                    content=content,
-                    severity="error"
-                )
-
-        except Exception as e:
-            logger.error(f"Error in MediaDisconnectionSignature: {e}")
-
-        return None
-
-
 def _search_patterns_in_string(string, patterns):
     """Utility function to search for patterns in a string."""
     if isinstance(patterns, str):
