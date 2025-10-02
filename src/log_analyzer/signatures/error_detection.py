@@ -289,25 +289,3 @@ class ErrorCreatingReadWriteLayer(ErrorSignature):
                 severity="error",
             )
         return None
-
-class SkipDisks(ErrorSignature):
-    """Report if user chose to skip formatting some disks on hosts."""
-
-    def analyze(self, log_analyzer) -> Optional[SignatureResult]:
-        cluster = log_analyzer.metadata.get("cluster", {})
-        skip = {
-            host["id"]: host["skip_formatting_disks"].split(",")
-            for host in cluster.get("hosts", [])
-            if host.get("skip_formatting_disks") not in (None, "")
-        }
-        if skip:
-            content = "\n".join(
-                f"User has chosen to skip formatting of disks for host {host_id}: {', '.join(disks)}; this could lead to boot order issues"
-                for host_id, disks in skip.items()
-            )
-            return self.create_result(
-                title="User has chosen to skip some disks",
-                content=content,
-                severity="warning",
-            )
-        return None

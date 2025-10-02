@@ -224,7 +224,3 @@ class InstallationDiskFIOSignature(Signature):
             return int(matches[0])
 
         return ((event, get_duration(event)) for event in events if get_duration(event) is not None)
-
-
-# TODO: Add more performance signatures here:
-# - SkipDisks
