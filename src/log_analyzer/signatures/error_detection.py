@@ -76,58 +76,6 @@ class MasterFailedToPullIgnitionSignature(ErrorSignature):
 
         return None
 
-class WrongBootOrderSignature(ErrorSignature):
-    """Reports hosts that need manual booting from installation disk."""
-
-    ERROR_PATTERN = "a manual booting from installation disk"
-    EVENT_PATTERN = "please boot the host"
-
-    def analyze(self, log_analyzer) -> Optional[SignatureResult]:
-        """Analyze wrong boot order issues."""
-        try:
-            metadata = log_analyzer.metadata
-            cluster = metadata["cluster"]
-            status_info = cluster["status_info"]
-            
-            if self.ERROR_PATTERN not in status_info:
-                return None
-
-            events = log_analyzer.get_last_instll_cluster_events()
-            reboot_events_by_host = {}
-            for event in events:
-                if self.EVENT_PATTERN in event["message"]:
-                    host_id = event.get("host_id")
-                    if host_id:
-                        if host_id not in reboot_events_by_host:
-                            reboot_events_by_host[host_id] = []
-                        reboot_events_by_host[host_id].append(event)
-
-            hosts = []
-            for host in cluster["hosts"]:
-                events = reboot_events_by_host.get(host["id"], [])
-                if events:
-                    hosts.append(OrderedDict(
-                        id=host["id"],
-                        hostname=log_analyzer.get_hostname(host),
-                        message=events[0]["message"],
-                    ))
-
-            if hosts:
-                content = "Events for rebooting the host from the installation disk were found.\nIt usually indicates a wrong boot order that should be addressed by the user.\n\n"
-                content += self.generate_table(hosts)
-
-                return self.create_result(
-                    title="Wrong Boot Order",
-                    content=content,
-                    severity="error"
-                )
-
-        except Exception as e:
-            logger.error(f"Error in WrongBootOrderSignature: {e}")
-
-        return None
-
-
 class SNOHostnameHasEtcd(ErrorSignature):
     """Looks for etcd in SNO hostname (OCPBUGS-15852)."""
 
