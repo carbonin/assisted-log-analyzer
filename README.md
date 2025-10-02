@@ -52,7 +52,7 @@ analyze-openshift-logs <cluster-uuid>
 ### Run Specific Signatures
 
 ```bash
-analyze-openshift-logs <cluster-uuid> --signatures HostsStatusSignature AgentStepFailureSignature
+analyze-openshift-logs <cluster-uuid> --signatures HostsStatusSignature EventsInstallationAttempts
 ```
 
 ### List Available Signatures
@@ -138,7 +138,6 @@ Use `analyze-openshift-logs --list-signatures` to see exactly which signatures a
 
 ### Advanced Analysis
 
-- `AgentStepFailureSignature`: Summarizes agent step failures per host.
 - `EventsInstallationAttempts`: Detects multiple installation attempts in the events log.
 - `MissingMustGatherLogs`: Warns when must-gather logs are missing but expected.
 - `FlappingValidations`: Tracks validation states that oscillate during install.
