@@ -141,7 +141,6 @@ Use `analyze-openshift-logs --list-signatures` to see exactly which signatures a
 - `EventsInstallationAttempts`: Detects multiple installation attempts in the events log.
 - `MissingMustGatherLogs`: Warns when must-gather logs are missing but expected.
 - `FlappingValidations`: Tracks validation states that oscillate during install.
-- `ControllerOperatorStatus`: Surfaces unhealthy operators from controller logs.
 - `NodeStatus`: Summarizes node condition data from installer gather artifacts.
 - `ControllerWarnings`: Extracts warning-level entries from controller logs.
 - `UserHasLoggedIntoCluster`: Notes evidence of interactive logins during install.

@@ -199,41 +199,6 @@ class FlappingValidations(Signature):
 
         return None
 
-
-class ControllerOperatorStatus(Signature):
-    """Extract degraded operators from controller logs and attach as YAML-like content."""
-
-    def analyze(self, log_analyzer) -> Optional[SignatureResult]:
-        try:
-            controller_logs = log_analyzer.get_controller_logs()
-        except FileNotFoundError:
-            return None
-
-        operator_statuses = operator_statuses_from_controller_logs(controller_logs)
-
-        def cond(op, name, expected):
-            c = op.get(name)
-            return c and (c["result"] == expected)
-
-        unhealthy = {}
-        for name, conds in operator_statuses.items():
-            if any([cond(conds, "Degraded", True), cond(conds, "Available", False), cond(conds, "Progressing", True)]):
-                unhealthy[name] = conds
-
-        if unhealthy:
-            try:
-                content = yaml.dump(unhealthy)
-            except Exception:
-                content = str(unhealthy)
-            return SignatureResult(
-                signature_name=self.name,
-                title="Operator status from Assisted Controller logs",
-                content=content,
-                severity="warning",
-            )
-        return None
-
-
 class NodeStatus(Signature):
     """Dump node statuses from installer gather nodes.json."""
 
@@ -450,7 +415,6 @@ class MachineConfigDaemonErrorExtracting(Signature):
 # TODO: Add more advanced analysis signatures here:
 # - AllInstallationAttemptsSignature (requires JIRA integration)
 # - MustGatherAnalysis
-# - ControllerOperatorStatus
 # - NodeStatus
 # - UserManagedNetworkingLoadBalancer
 # - FailedRequestTriggersHostTimeout
