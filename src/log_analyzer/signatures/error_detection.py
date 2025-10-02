@@ -290,32 +290,6 @@ class ErrorCreatingReadWriteLayer(ErrorSignature):
             )
         return None
 
-
-class InsufficientLVMCleanup(ErrorSignature):
-    """Detect LVM cleanup issues correlated with coreos-installer Can't open error (MGMT-11695)."""
-
-    def analyze(self, log_analyzer) -> Optional[SignatureResult]:
-        cluster = log_analyzer.metadata.get("cluster", {})
-        hosts_msgs = []
-        for host in cluster.get("hosts", []):
-            try:
-                inventory = json.loads(host.get("inventory", "{}"))
-            except json.JSONDecodeError:
-                inventory = {}
-            has_lvm = any(disk.get("drive_type") == "LVM" for disk in inventory.get("disks", []))
-            if has_lvm and "Can't open" in host.get("status_info", ""):
-                hosts_msgs.append(
-                    f"Host {log_analyzer.get_hostname(host)} has LVM disks and has the 'Can't open' coreos-installer error; this is probably due to MGMT-11695"
-                )
-        if hosts_msgs:
-            return self.create_result(
-                title="Trouble cleaning LVM - MGMT-11695",
-                content="\n".join(hosts_msgs),
-                severity="warning",
-            )
-        return None
-
-
 class SkipDisks(ErrorSignature):
     """Report if user chose to skip formatting some disks on hosts."""
 
