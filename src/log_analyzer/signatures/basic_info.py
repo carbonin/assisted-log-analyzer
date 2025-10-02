@@ -12,31 +12,6 @@ from .base import Signature, SignatureResult
 
 logger = logging.getLogger(__name__)
 
-
-class OpenShiftVersionSignature(Signature):
-    """Sets the OpenShift version in the analysis."""
-
-    def analyze(self, log_analyzer) -> Optional[SignatureResult]:
-        """Analyze OpenShift version."""
-        try:
-            metadata = log_analyzer.metadata
-            openshift_version = metadata["cluster"]["openshift_version"]
-            major, minor, *_ = openshift_version.split(".")
-
-            content = f"OpenShift Version: {openshift_version}\nMajor.Minor: {major}.{minor}"
-
-            return SignatureResult(
-                signature_name=self.name,
-                title="OpenShift Version Information",
-                content=content,
-                severity="info"
-            )
-
-        except Exception as e:
-            logger.error(f"Error in OpenShiftVersionSignature: {e}")
-            return None
-
-
 class HostsStatusSignature(Signature):
     """Analyzes host status and progress."""
 
