@@ -412,6 +412,332 @@ class MachineConfigDaemonErrorExtracting(Signature):
         return None
 
 
+class BootkubeAttempts(Signature):
+    """Counts the number of times bootkube attempted to run."""
+
+    def __init__(self):
+        """Initialize the signature."""
+        super().__init__()
+
+    def analyze(self, log_analyzer) -> Optional[SignatureResult]:
+        """Analyze bootkube attempts from bootkube.json file."""
+        try:
+            bootkube_json_path = f"{NEW_LOG_BUNDLE_PATH}/bootstrap/services/bootkube.json"
+            
+            try:
+                bootkube_content = log_analyzer.logs_archive.get(bootkube_json_path)
+            except FileNotFoundError:
+                return None
+            
+            # Parse the JSON content
+            try:
+                bootkube_events = json.loads(bootkube_content)
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse bootkube.json: {e}")
+                return None
+            
+            # Count "service start" phases to determine number of attempts
+            # Deduplicate by timestamp since there can be multiple entries with the same timestamp
+            service_start_timestamps = set()
+            for event in bootkube_events:
+                if event.get("phase") == "service start":
+                    timestamp = event.get("timestamp")
+                    if timestamp:
+                        service_start_timestamps.add(timestamp)
+            
+            service_start_count = len(service_start_timestamps)
+            
+            if service_start_count == 0:
+                return None
+            
+            # Create content with attempt details
+            content = f"Bootkube attempted to run {service_start_count} time(s).\n\n"
+            
+            if service_start_count > 1:
+                content += "Multiple bootkube attempts detected. This may indicate:\n"
+                content += "- Previous attempts failed and bootkube was restarted\n"
+                content += "- System instability during bootstrap process\n"
+                content += "- Resource constraints or timing issues\n\n"
+                content += "Review the bootkube.json file for detailed attempt information and failure reasons."
+                severity = "warning"
+            else:
+                content += "Single bootkube attempt detected."
+                severity = "info"
+            
+            return SignatureResult(
+                signature_name=self.name,
+                title="Bootkube Attempts Analysis",
+                content=content,
+                severity=severity
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in BootkubeAttempts: {e}", exc_info=True)
+            return None
+
+
+class ContainerCrashAnalysis(Signature):
+    """Analyzes container crashes in the last 30 minutes of the install from kubelet logs."""
+
+    def __init__(self):
+        """Initialize the signature."""
+        super().__init__()
+
+    def analyze(self, log_analyzer) -> Optional[SignatureResult]:
+        """Analyze container crashes from kubelet logs in control plane nodes."""
+        try:
+            from collections import defaultdict
+            from datetime import datetime, timedelta
+            import dateutil.parser
+
+            logger.debug("Starting ContainerCrashAnalysis")
+
+            # Pattern to match container crash errors in kubelet logs
+            crash_pattern = re.compile(
+                r'(\w{3} \d{1,2} \d{2}:\d{2}:\d{2}) .* "Error syncing pod, skipping" err="failed to \\"StartContainer\\" for \\"([^"]+)\\" with CrashLoopBackOff'
+            )
+
+            container_crashes = defaultdict(int)
+            host_container_crashes = defaultdict(lambda: defaultdict(int))
+            crash_details = []
+
+            try:
+                # Get control-plane directory
+                control_plane_dir = log_analyzer.logs_archive.get(f"{NEW_LOG_BUNDLE_PATH}/control-plane/")
+                logger.debug(f"Found control-plane directory: {NEW_LOG_BUNDLE_PATH}/control-plane/")
+                
+                # First pass: collect all log entries and find the latest timestamp
+                all_log_entries = []
+                latest_timestamp = None
+                
+                # Traverse each control plane node directory
+                for node_dir in getattr(control_plane_dir, "iterdir", lambda: [])():
+                    node_ip = os.path.basename(node_dir)
+                    logger.debug(f"Processing control plane node: {node_ip}")
+                    
+                    # Look for kubelet.log in this node
+                    kubelet_log_path = f"{NEW_LOG_BUNDLE_PATH}/control-plane/{node_ip}/journals/kubelet.log"
+                    try:
+                        kubelet_logs = log_analyzer.logs_archive.get(kubelet_log_path)
+                        logger.debug(f"Found kubelet.log for node {node_ip}, size: {len(kubelet_logs)} characters")
+                    except FileNotFoundError:
+                        logger.debug(f"kubelet.log not found for node {node_ip} at path: {kubelet_log_path}")
+                        continue
+                    
+                    # Parse all log lines to find timestamps and crash patterns
+                    line_count = 0
+                    crash_matches_found = 0
+                    for line in kubelet_logs.split('\n'):
+                        line_count += 1
+                        if not line.strip():
+                            continue
+                            
+                        # Extract timestamp from any log line (format: "Sep 17 14:40:15")
+                        timestamp_match = re.match(r'(\w{3} \d{1,2} \d{2}:\d{2}:\d{2})', line)
+                        if timestamp_match:
+                            timestamp_str = timestamp_match.group(1)
+                            try:
+                                # Parse the timestamp (format: "Sep 17 14:40:15")
+                                log_time = datetime.strptime(timestamp_str, "%b %d %H:%M:%S")
+                                
+                                # Track the latest timestamp
+                                if latest_timestamp is None or log_time > latest_timestamp:
+                                    latest_timestamp = log_time
+                                    
+                            except ValueError as e:
+                                logger.debug(f"Failed to parse timestamp '{timestamp_str}': {e}")
+                                continue
+                        
+                        # Check for crash patterns
+                        crash_match = crash_pattern.search(line)
+                        if crash_match:
+                            crash_matches_found += 1
+                            timestamp_str = crash_match.group(1)
+                            container_name = crash_match.group(2)
+                            logger.debug(f"Found crash match: {container_name} at {timestamp_str}")
+                            all_log_entries.append({
+                                'timestamp_str': timestamp_str,
+                                'container_name': container_name,
+                                'node_ip': node_ip,
+                                'line': line
+                            })
+                    
+                    logger.debug(f"Node {node_ip}: processed {line_count} lines, found {crash_matches_found} crash matches")
+                
+                logger.debug(f"Total crash entries found: {len(all_log_entries)}")
+                logger.debug(f"Latest timestamp found: {latest_timestamp}")
+                
+                # If we found a latest timestamp, filter crashes to last 30 minutes
+                if latest_timestamp:
+                    thirty_minutes_before_latest = latest_timestamp - timedelta(minutes=30)
+                    logger.debug(f"Filtering crashes from {thirty_minutes_before_latest} to {latest_timestamp}")
+                    
+                    for entry in all_log_entries:
+                        try:
+                            # Parse the crash timestamp
+                            crash_time = datetime.strptime(entry['timestamp_str'], "%b %d %H:%M:%S")
+                            
+                            # Check if this crash is within the last 30 minutes of the latest log entry
+                            if crash_time >= thirty_minutes_before_latest:
+                                logger.debug(f"Including crash: {entry['container_name']} at {entry['timestamp_str']}")
+                                container_crashes[entry['container_name']] += 1
+                                host_container_crashes[entry['node_ip']][entry['container_name']] += 1
+                                crash_details.append({
+                                    'timestamp': entry['timestamp_str'],
+                                    'container': entry['container_name'],
+                                    'node': entry['node_ip']
+                                })
+                            else:
+                                logger.debug(f"Excluding crash (too old): {entry['container_name']} at {entry['timestamp_str']}")
+                        except ValueError as e:
+                            logger.debug(f"Failed to parse crash timestamp '{entry['timestamp_str']}': {e}")
+                            # If timestamp parsing fails, still count the crash
+                            container_crashes[entry['container_name']] += 1
+                            host_container_crashes[entry['node_ip']][entry['container_name']] += 1
+                            crash_details.append({
+                                'timestamp': entry['timestamp_str'],
+                                'container': entry['container_name'],
+                                'node': entry['node_ip']
+                            })
+                else:
+                    logger.debug("No latest timestamp found, counting all crashes")
+                    # If we couldn't determine the latest timestamp, count all crashes
+                    for entry in all_log_entries:
+                        container_crashes[entry['container_name']] += 1
+                        host_container_crashes[entry['node_ip']][entry['container_name']] += 1
+                        crash_details.append({
+                            'timestamp': entry['timestamp_str'],
+                            'container': entry['container_name'],
+                            'node': entry['node_ip']
+                        })
+            
+            except FileNotFoundError as e:
+                logger.debug(f"Control-plane directory not found: {e}")
+
+            logger.debug(f"Final container crashes: {dict(container_crashes)}")
+            logger.debug(f"Final crash details count: {len(crash_details)}")
+
+            # If no crashes found, return None
+            if not container_crashes:
+                logger.debug("No container crashes found, returning None")
+                return None
+
+            # Generate content with crash summary grouped by host
+            content = "Container crashes detected in the last 30 minutes:\n\n"
+            
+            # Sort hosts by total crash count (descending)
+            host_totals = {host: sum(containers.values()) for host, containers in host_container_crashes.items()}
+            sorted_hosts = sorted(host_totals.items(), key=lambda x: x[1], reverse=True)
+            
+            for host_ip, total_crashes in sorted_hosts:
+                content += f"Host {host_ip} ({total_crashes} total crashes):\n"
+                
+                # Sort containers by crash count for this host
+                sorted_containers = sorted(host_container_crashes[host_ip].items(), key=lambda x: x[1], reverse=True)
+                
+                for container_name, crash_count in sorted_containers:
+                    content += f"  • {container_name}: {crash_count} crash(es)\n"
+                    
+                    # Try to find and include the last 20 logs for this container
+                    try:
+                        container_logs_list = self._get_container_logs(log_analyzer, host_ip, container_name)
+                        if container_logs_list:
+                            content += f"    Last 20 container logs:\n"
+                            for log_file_name, log_lines in container_logs_list:
+                                if len(container_logs_list) > 1:
+                                    content += f"      --- {log_file_name} ---\n"
+                                for log_line in log_lines:
+                                    content += f"      {log_line}\n"
+                                if len(container_logs_list) > 1:
+                                    content += f"      --- end {log_file_name} ---\n"
+                        else:
+                            content += f"    (Container logs not found)\n"
+                    except Exception as e:
+                        logger.debug(f"Failed to get logs for {container_name} on {host_ip}: {e}")
+                        content += f"    (Error retrieving container logs)\n"
+                
+                content += "\n"
+            
+            # Determine severity based on crash count
+            total_crashes = sum(container_crashes.values())
+            if total_crashes >= 10:
+                severity = "error"
+            elif total_crashes >= 5:
+                severity = "warning"
+            else:
+                severity = "info"
+
+            return SignatureResult(
+                signature_name=self.name,
+                title="Container Crash Analysis (Last 30 Minutes)",
+                content=content,
+                severity=severity
+            )
+
+        except Exception as e:
+            logger.error(f"Error in ContainerCrashAnalysis: {e}", exc_info=True)
+            return None
+
+    def _get_container_logs(self, log_analyzer, host_ip: str, container_name: str) -> List[tuple]:
+        """Get the last 20 lines from all container log files for a given container."""
+        try:
+            # Look for container log files in the containers directory
+            containers_dir_path = f"{NEW_LOG_BUNDLE_PATH}/control-plane/{host_ip}/containers/"
+            
+            try:
+                containers_dir = log_analyzer.logs_archive.get(containers_dir_path)
+            except FileNotFoundError:
+                logger.debug(f"Containers directory not found: {containers_dir_path}")
+                return []
+            
+            # Find all container log files (they have a random hash component)
+            # Pattern: {container_name}-{hash}.log (exact match, not substring)
+            container_log_files = []
+            for item in getattr(containers_dir, "iterdir", lambda: [])():
+                item_path = str(item) if hasattr(item, '__str__') else item
+                # Extract just the filename from the full path
+                item_name = os.path.basename(item_path)
+                logger.debug(f"evaluating item name {item_name} from path {item_path}")
+                # Use regex to ensure exact container name match followed by hyphen and hash
+                import re
+                pattern = re.compile(rf"^{re.escape(container_name)}-[a-f0-9]{{64}}\.log$")
+                if pattern.match(item_name):
+                    container_log_files.append(item_name)
+            
+            if not container_log_files:
+                logger.debug(f"No log files found for container {container_name} on {host_ip}")
+                return []
+            
+            logger.debug(f"Found {len(container_log_files)} log files for container {container_name} on {host_ip}")
+            
+            # Process each log file
+            all_logs = []
+            for log_file_name in sorted(container_log_files):  # Sort for consistent ordering
+                log_file_path = f"{containers_dir_path}/{log_file_name}"
+                
+                try:
+                    container_log_content = log_analyzer.logs_archive.get(log_file_path)
+                except FileNotFoundError:
+                    logger.debug(f"Container log file not found: {log_file_path}")
+                    continue
+                
+                # Get the last 20 lines from this log file
+                log_lines = container_log_content.split('\n')
+                # Filter out empty lines and get last 20 non-empty lines
+                non_empty_lines = [line for line in log_lines if line.strip()]
+                last_20_lines = non_empty_lines[-20:] if len(non_empty_lines) > 20 else non_empty_lines
+                
+                if last_20_lines:  # Only include if there are actual log lines
+                    all_logs.append((log_file_name, last_20_lines))
+                    logger.debug(f"Retrieved {len(last_20_lines)} log lines from {log_file_name}")
+            
+            return all_logs
+            
+        except Exception as e:
+            logger.debug(f"Error getting container logs for {container_name} on {host_ip}: {e}")
+            return []
+
+
 # TODO: Add more advanced analysis signatures here:
 # - AllInstallationAttemptsSignature (requires JIRA integration)
 # - MustGatherAnalysis
